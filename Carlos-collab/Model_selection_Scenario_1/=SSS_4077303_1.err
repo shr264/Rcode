@@ -1,0 +1,41 @@
+Loading required package: igraph
+Loading required package: methods
+
+Attaching package: ‘igraph’
+
+The following objects are masked from ‘package:stats’:
+
+    decompose, spectrum
+
+The following object is masked from ‘package:base’:
+
+    union
+
+
+Attaching package: ‘BDgraph’
+
+The following object is masked from ‘package:igraph’:
+
+    compare
+
+Loading required package: MASS
+
+Attaching package: ‘MASS’
+
+The following object is masked from ‘package:BDgraph’:
+
+    select
+
+Loading required package: lattice
+Classes and Methods for R developed in the
+
+Political Science Computational Laboratory
+
+Department of Political Science
+
+Stanford University
+
+Simon Jackman
+
+hurdle and zeroinfl functions by Achim Zeileis
+

@@ -1,0 +1,7 @@
+load("/Users/syedrahman/Documents/Spring2017/Carlos/Model_selection_Scenario_1/score11.rdata")
+score11
+ls()
+"Score1_1"
+summary(Score1_1)
+Score1_1$scores
+q()

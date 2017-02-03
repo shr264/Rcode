@@ -1,0 +1,407 @@
+
+#setwd("/scratch/lfs/carlosmn/Chapter3/Cov")
+#setwd('C:/CAMN/PhD/Dissertation/Publications/2016/Chapter_3/Data_analysis/Outputs/Cov_GM')
+
+
+#####################################################################################################
+#####################################################################################################
+########------------------------Program to read data from QMSim-----------------------------#########
+#####################################################################################################
+#####################################################################################################
+
+#--To read genotypes
+
+genodata.path1='Pop1_mrk_002.txt'
+
+#genodata.path1='C:/CAMN/PhD/Dissertation/Publications/2016/Chapter_3/Data_analysis/Simulations/r_Dataset_2/Genotypes/Pop1_mrk_001.txt'
+
+
+presel.pos=read.table("lm_mrk_002.txt",header=T) 
+#presel.pos=read.table("C:/CAMN/PhD/Dissertation/Publications/2016/Chapter_3/Data_analysis/Simulations/r_Dataset_2/lm_mrk_001.txt",header=T) 
+
+delta=6*2+6+2+1
+###---------------------------------------------#######
+###--Function to read and redifine the genotypes--#####
+#######################################################
+
+create.W=function(genodata.path){
+
+  n=NULL # use NULL if unknown
+  genofile=genodata.path
+ 
+  if(is.null(n)){
+   n<-length(count.fields(genofile))
+                }
+  nloci=length(unlist(strsplit(scan(genofile,what=character(),nlines=1,quiet=TRUE)[2],split='')))
+
+  Z=matrix(nrow=n,ncol=nloci,NA)
+  id=rep(NA,n)
+
+  genecontent=file(genofile,open='r')
+  for(i in 1:n){
+      tmp=scan(genecontent,what=character(),nlines=1,quiet=TRUE)
+      id[i]=tmp[1]
+      geno=as.numeric(unlist(strsplit(tmp[-1],split='')))
+      Z[i, ]=geno
+      #print(i)
+                }
+
+
+  W=matrix(0,nrow=nrow(Z),ncol=ncol(Z))
+   for(i in 1:nrow(Z)){
+      for(j in 1:ncol(Z)){
+               if(Z[i,j]==0 || Z[i,j]==2){
+                                    W[i,j]=Z[i,j]-1
+                                          }
+               if(Z[i,j]==3 || Z[i,j]==4){
+                                    W[i,j]=0
+                                         }
+                         }
+                       }
+  return(W)
+                                     }
+
+
+###---Reading pedigree, phenotypes and total additive effects     
+                                     
+data1=read.table("Pop1_data_002.txt",header=T)  
+#data1=read.table("C:/CAMN/PhD/Dissertation/Publications/2016/Chapter_3/Data_analysis/Simulations/r_Dataset_2/Pop1_data_001.txt",header=T)
+                                   
+W=create.W(genodata.path1)
+nloci=ncol(W)
+#Pedigree=data1[ ,c(1,2,3,5)]
+
+
+#########################################################
+###-----Create training and testing population-----######
+#########################################################
+
+data1.Training=data1[-which(data1$G==2), ]
+W.Train=W[-which(data1$G==2), ]
+n.train=nrow(W.Train)
+
+data1.Test=data1[which(data1$G==2), ]
+
+
+######################################################################
+####---Function to define connected nodes for sliding windows----#####
+######################################################################
+
+Def.Graph.Band=function(band.size,nloci){
+      win.size=band.size-1
+	size=band.size*(nloci-band.size+1)+sum(seq(2,max(band.size-1,2),1))-nloci+1  
+	Connect.nodes=matrix(nrow=size,ncol=2)
+      template=sort(rep(seq(1,nloci-win.size,1),win.size))
+      for(i in 0:(nloci-win.size-1)){
+      	Connect.nodes[which(template==i+1),2]=seq(2+i,2+i+win.size-1,1)
+      	seq(2+i,2+i+win.size-1,1)
+                                     }
+      Connect.nodes[1:length(template),1]=template
+      counter=seq(2,max(2,win.size-1),1)
+      links=list(rep(NA,win.size-1))
+      for(i in 1:(win.size-1)){
+		links[[i]]=rep(nloci-i,i)
+                             }
+	Connect.nodes[(length(template)+1):size,1]=sort(do.call(c,links),decreasing=FALSE)
+	links2=list(rep(NA,win.size-1))
+      for(i in 1:(win.size-1)){
+		links2[[i]]=seq(nloci-win.size+i+1,nloci,1)
+                             }
+	Connect.nodes[(length(template)+1):size,2]=do.call(c,links2)	
+      return(list(Connect.nodes,size))	
+                                        }
+
+
+###########################################################################
+#########-------Define counts for Chromosomes and multiNodes----###########
+###########################################################################
+
+N.Chr=max(presel.pos$Chr)
+Chr.n=matrix(0,nrow=N.Chr)
+for(i in 1:N.Chr){Chr.n[i]=length(which(presel.pos$Chr==i))}
+
+                                    
+###############################################################
+########---Functions to build the adjacency matrices----#######
+###############################################################
+
+
+Adj2=function(Nodes,nloci){  ###Yields a symmetric matrix 
+	library(Matrix)
+	Adj=as(diag(nloci),"dgTMatrix")
+      for(i in 1:nrow(Nodes)){
+		Adj[Nodes[i,1],Nodes[i,2]]=1
+            Adj[Nodes[i,2],Nodes[i,1]]=1
+                              }
+	return(Adj)
+			       }
+
+Adj3=function(Nodes,nloci){
+	library(Matrix)
+	Adj=as(matrix(0,nrow=nloci,ncol=nloci),"dgTMatrix")
+	for(i in 1:nrow(Nodes)){
+		Adj[Nodes[i,2],Nodes[i,1]]=1
+                              }
+	return(Adj)
+			       }
+
+
+library(pscl)
+library(mvtnorm) 
+library(Matrix)
+
+
+
+############################################################################
+###---Function to sample from full cond. in Concentration graph models---### 
+#############--------------Decomposable graphs-------------------###########
+############################################################################
+
+SampLDL=function(Delta,U,nloci,Nodes,g){
+      S=tcrossprod(g)
+	D=matrix(0,nrow=nloci)
+	X=list(c(rep(NA,nloci-1)))
+	L=diag(nloci)
+	postm=S+U
+	library(pscl)
+      library(mvtnorm) 
+      library(Matrix)
+      for(j in 1:(nloci-1)){
+            #pointer=which(G2[j,(j+1):ncol(G)]==1)+j
+            pointer=Nodes[which(Nodes[ ,1]==j),2]
+            Post1=postm[pointer,pointer]
+            cov=chol2inv(chol(Post1))
+	      #Postmpart=rbind(c(postm[j,j],postm[j,pointer]),cbind(postm[j,pointer],Post1))
+		D[j]=rigamma(1,alpha=(Delta+length(pointer)+2)/2,beta=(postm[j,j]-postm[j,pointer]%*%(cov%*%postm[j,pointer]))/2)
+		X[[j]]=rmvnorm(1,mean=-cov%*%postm[j,pointer],sigma=cov/D[j],method="chol")
+            L[pointer,j]=X[[j]]
+            #L[pointer,j]=rmvnorm(1,mean=-cov%*%postm[j,pointer],sigma=cov/D[j],method="chol")
+		                }
+      D[nloci]=rigamma(1,alpha=(Delta+2)/2,beta=U[nloci,nloci]/2)
+      G=tcrossprod(L%*%Diagonal(length(D),sqrt(D)))
+      
+      return(list(G,matrix(do.call(c,X)),D,L))
+	                                        }
+
+
+
+###################################################################################################
+##########---Function to sample from full cond. Khare and Rajaratnam-No functional zeros---########
+###################################################################################################
+
+library(pscl)
+library(mvtnorm) 
+library(Matrix)
+library(matrixcalc)
+
+SampKR2=function(Nodes,g,U,alpha,n,L0,D0,nloci){
+      S=tcrossprod(g)
+	L=L0
+	Sig=S+U
+	Linv=forwardsolve(L,x=diag(nloci))
+      #Linv=L0
+	LinvU=Linv%*%Sig
+	LUL=LinvU%*%t(Linv)
+	D=D0
+	#SIGMA=tcrossprod(L%*%Diagonal(nloci,sqrt(D)))
+	OMEGA=forceSymmetric(crossprod(Diagonal(nloci,sqrt(1/D))%*%Linv))
+	#OMEGA=crossprod(Diagonal(nloci,sqrt(D))%*%Linv)
+		#OMEGA2=chol2inv(chol(SIGMA))
+            #round(OMEGA%*%SIGMA,3)
+		#round(OMEGA2-OMEGA,3)
+	
+	for(v in 1:(nloci-1)){
+		LULvv=LUL[v,v]
+		pointer=Nodes[which(Nodes[ ,1]==v),2]
+		ni=length(pointer)
+		#kv=length(nullw[[v]])
+		MuvInv=LUL[v,v]*OMEGA[pointer,pointer]
+		Muv=chol2inv(chol(MuvInv))
+		#round(solve(t(L))-t(Linv),6)
+		#round(t(L)%*%t(Linv),6)
+		
+		if(max(pointer)<nloci){
+			nopointer=seq(max(pointer)+1,nloci,1)
+			mwv.greater=matrix(0,nrow=length(nopointer))
+		      for(w in 1:length(nopointer)){
+			    	   mwv.greater[w]=(LinvU[v,nopointer[w]]/LULvv)
+                            		            }
+				         }else{
+						nopointer=integer(0)
+						}
+
+		#mvg=matrix(0,ncol=ni)
+                       
+		muv=secondcomp=matrix(0,nrow=ni)##This is for u>v, (u,v) in E, which ALWAYS yields functional zeros in Linv-uv(upper)
+		for(u in 1:ni){
+			    muv[u]=(LinvU[v,pointer[u]]/LULvv)
+                                       }
+               
+		for(u in 1:ni){  ##Defines uth entry of vector mv
+			if(ni>0 && length(nopointer)>0){
+				Inner=matrix(0,nrow=ni)
+				for(l in 1:ni){
+					Inner[l]=crossprod(OMEGA[pointer[l],nopointer],mwv.greater)###for w greater than u not connected with u
+						                }
+				summand1=crossprod(Inner,Muv[u, ])
+					     }else{
+						summand1=0}
+			
+							}##close loop for u
+		
+		mv=muv+secondcomp	##mean vector	
+		L[pointer,v]=rmvnorm(1,mean=mv,sigma=as.matrix(Muv),method="chol")
+		Linv=forwardsolve(L,x=diag(nloci))
+		LinvU=Linv%*%Sig
+		LUL=LinvU%*%t(Linv)
+            D[v]=rigamma(1,alpha=(n+alpha[v]-2*ni)/2,beta=LULvv/2)
+		OMEGA=forceSymmetric(crossprod(Diagonal(nloci,sqrt(1/D))%*%Linv))
+				    } ###Close loop for v
+
+      D[nloci]=rigamma(1,alpha=(n+alpha[nloci])/2,beta=LUL[nloci,nloci]/2)
+      SIGMA=tcrossprod(L%*%Diagonal(nloci,sqrt(D)))
+      return(list(SIGMA,L,D))
+	                                        }
+
+
+Chr.list=as.matrix(presel.pos$Chr)
+Block.template=list(rep(NA,N.Chr))
+for(i in 1:N.Chr){Block.template[[i]]=matrix(which(Chr.list==i))}
+
+
+
+######################################################################################################
+##################--------Function to create Block Diag SIGMA---------################################
+######################################################################################################
+
+
+
+L0BLOCK=D0BLOCK=NodesBLOCK=list(rep(NA,N.Chr))
+	for(i in 1:N.Chr){
+			NodesBLOCK[[i]]=Def.Graph.Band(band.size=7,nloci=Chr.n[i])[[1]]
+			L0BLOCK[[i]]=Adj3(Nodes=NodesBLOCK[[i]],nloci=Chr.n[i])+diag(Chr.n[i])
+                 	D0BLOCK[[i]]=SampLDL(Delta=20,U=diag(Chr.n[i]),nloci=Chr.n[i],Nodes=NodesBLOCK[[i]],g=rnorm(Chr.n[i],0,1))[[3]]
+			
+                        }
+
+
+SIGMABLOCK.KR=function(N.Chr,gv,Block.template,L0BLOCK,D0BLOCK,NodesBLOCK,Chr.n){
+      SIGMABLOCK=LBLOCK=DBLOCK=list(rep(NA,N.Chr))
+  	for(i in 1:N.Chr){
+		SAMPLE=SampKR2(Nodes=NodesBLOCK[[i]],g=gv[Block.template[[i]]],U=diag(Chr.n[i]),alpha=rep(23,Chr.n[i]),
+                                     n=nrow(data1.Training),L0=L0BLOCK[[i]],D0=D0BLOCK[[i]],nloci=Chr.n[i])
+		SIGMABLOCK[[i]]=SAMPLE[[1]]
+            LBLOCK[[i]]=SAMPLE[[2]]
+		DBLOCK[[i]]=SAMPLE[[3]]
+                        }
+	SIGMA=bdiag(SIGMABLOCK)
+	return(list(SIGMA,LBLOCK,DBLOCK))
+							    }	
+
+
+################################################################################
+################################################################################
+###---Gibbs sampler for covariance graph models KR Gibbs sampler for SIGMA----##
+################################################################################              
+################################################################################
+
+BibiCovGrapDecKR=function(y,nloci,Nsim,Tau,V,W,NodesBLOCK,L0BLOCK,D0BLOCK,Block.template,N.Chr,Chr.n,Burnin){
+          
+   n=nrow(W)
+   norms=matrix(0,nrow=Nsim)
+   LOLD=L0BLOCK
+   DOLD=D0BLOCK
+
+   #####---Create arrays to save samples
+
+   g=matrix(0,nrow=Nsim,ncol=nloci)
+   res.var=matrix(0,nrow=Nsim)
+
+   #####---Initial values of Hyper-parameters
+
+   library(MCMCpack)
+   library(mvtnorm) 
+   g[1, ]=rmvnorm(1,mean= matrix(0,nrow=nloci),sigma=diag(nloci),method="chol")
+   library(pscl)
+   res.var[1]=rigamma(1,alpha=V/2,beta=Tau/2)
+   
+  
+   ##########################################
+   #####-----Start algorithm-----############
+   ##########################################
+
+   WTW=crossprod(W)
+   WTy=crossprod(W,y)
+   Sigma.hat=matrix(0,nrow=nloci,ncol=nloci)
+   for(i in 2:Nsim){
+     Sample=SIGMABLOCK.KR(N.Chr=N.Chr,gv=g[i-1,],Block.template=Block.template,
+	L0BLOCK=LOLD,D0BLOCK=DOLD,NodesBLOCK=NodesBLOCK,Chr.n=Chr.n)
+     Sigma=Sample[[1]]
+     norms[i]=norm(Sigma,type="F")
+     WS=W%*%Sigma
+     inv=chol2inv(chol((diag(n)*res.var[i-1])+forceSymmetric(WS%*%t(W))))
+     root=chol(inv)%*%WS
+     cov=forceSymmetric(Sigma-crossprod(root))
+     g[i, ]=rmvnorm(1, mean=crossprod(cov,WTy)/res.var[i-1],sigma=as.matrix(cov),method="chol")
+     LOLD=Sample[[2]]
+     DOLD=Sample[[3]]
+     res.var[i]=rigamma(1,alpha=(V+n)/2,beta=(Tau+crossprod(y-W%*%g[i, ]))/2)
+     if(i > Burnin){
+                 Sigma.hat=(Sigma.hat*(i-Burnin-1)+Sigma)/(i-Burnin)
+                 #Ginv.sum=(Ginv.sum++Ginv[[1]])
+                    }
+                         }
+   
+   PostmeanMar=colMeans(g[(Burnin+1):Nsim, ])
+  
+   write.table(matrix(res.var[(Burnin+1):Nsim]),col.names=FALSE,row.names=FALSE,
+   file="Phen2ResVarKR2.csv", sep=",")
+
+   write.table(g[(Burnin+1):Nsim, ],col.names=FALSE,row.names=FALSE,
+   file="Phen2MarkEffectsKR2.csv", sep=",")
+   
+   write.table(as.matrix(Sigma.hat),col.names=FALSE,row.names=FALSE,
+   file="Phen2SIGMAhatKR2.csv", sep=",")
+
+   write.table(norms[(Burnin+1):Nsim],col.names=FALSE,row.names=FALSE,
+   file="Phen2normsKR2.csv", sep=",")
+
+   return(PostmeanMar)
+
+                                
+                                                          }
+
+Test=BibiCovGrapDecKR(y=data1.Training$Phen,nloci=ncol(W.Train),Nsim=9000,Tau=7000,V=100,W=W.Train,NodesBLOCK=NodesBLOCK,
+L0BLOCK=L0BLOCK,D0BLOCK=D0BLOCK,Block.template=Block.template,N.Chr=N.Chr,Chr.n=Chr.n,Burnin=5000)
+
+#--Predicted Breeding values
+W.Test=W[which(data1$G==2), ]
+PredBVTrainGEMB=W.Train%*%as.matrix(Test)
+PredBVTestGEMB=W.Test%*%as.matrix(Test)
+
+##################################################
+###--------Predictive abilities---------------####
+##################################################
+
+Predabil.GB=cor(data1.Test$Phen,PredBVTestGEMB,method="pearson")
+
+#########################################
+###--correlation of breeding values---###
+#########################################
+
+corrBVGB=cor(data1.Test$QTL,PredBVTestGEMB,method="pearson")
+
+#########################################################
+###---Correlations of breeding values in training----####
+#########################################################
+
+corrBVTrainGB=cor(data1.Training$QTL,PredBVTrainGEMB,method="pearson")
+
+Performance=matrix(c(Predabil.GB,corrBVGB,corrBVTrainGB))
+write.table(Performance,col.names=FALSE,row.names=FALSE,file="BayesKRperform2.csv", sep=",")
+
+
+
+
+
+
