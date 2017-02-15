@@ -3,13 +3,16 @@ title: "Call Center Data"
 author: "Syed Rahman"
 date: "2/6/2017"
 output:
-  pdf_document: default
   html_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 knitr::opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE)
+library(igraph)
+library(ggm)
+library(stringr)
 library(pracma)
 library(forecast)
 library(chron)
@@ -25,7 +28,27 @@ source('CSCS2.r')
 
 ## Call Center Data Analysis
 
-The goal is to predict the number of calls coming in during the second half of the day using the number of calls recieved during the first half of the day. To this end suppose $x_1$ and $x_2$ is the number of calls received during the first half of the day and the second half of the day, respectively. Let $x = (x_1^t, x_2^t)^t$ and $y = \sqrt{x + \frac{1}{4}}$. It can be shown that if $x \sim Poisson(\lambda)$, then $y \overset{.}{\sim} \mathcal{N}(\mu,\Sigma)$. In such a case, $y_2|y_1 \sim \mathcal{N}(\mu_2 + \Sigma_{21} \Sigma_{11}^{-1} (y_1 - \mu_1), \Sigma_{22} - \Sigma_{21} \Sigma_{11}^{-1} \Sigma_{12})$. Hence the best mean squared predictor of $y_2$ given $y_1$ (i.e. the preidctor that minimizes mean squared error) is 
+The goal is to predict the number of calls coming in during the second half of the day using the number of calls recieved during the first half of the day. To this end suppose $x_1$ and $x_2$ is the number of calls received during the first half of the day and the second half of the day, respectively. Let $x = (x_1^t, x_2^t)^t$ and $y = \sqrt{x + \frac{1}{4}}$. It can be shown that if $x \sim Poisson(\lambda)$, then $y \overset{.}{\sim} \mathcal{N}(\mu,\Sigma)$. 
+
+```{r poisson, echo=FALSE}
+poisdat = rpois(10000,5)
+hist(poisdat, xlab = "x", main = "Poisson data")
+```
+
+```{r normal, echo=FALSE}
+normdat = sqrt(poisdat+1/4)
+hist(normdat, xlab = "y", main = "Poisson data with square root transformation")
+```
+
+Suppose we partition the covariance matrix of $y$ as follows:
+$$
+\Sigma = 
+\begin{pmatrix}
+\Sigma_{11} & \Sigma_{12} \\
+\Sigma_{21} & \Sigma_{22} \\
+\end{pmatrix}
+$$
+In such a case, $y_2|y_1 \sim \mathcal{N}(\mu_2 + \Sigma_{21} \Sigma_{11}^{-1} (y_1 - \mu_1), \Sigma_{22} - \Sigma_{21} \Sigma_{11}^{-1} \Sigma_{12})$. Hence the best mean squared predictor of $y_2$ given $y_1$ (i.e. the preidctor that minimizes mean squared error) is 
 $$\mathbb{E}[y_2|y_1] = \mu_2 + \Sigma_{21} \Sigma_{11}^{-1} (y_1 - \mu_1).$$ 
 This is done using the follow code:
 ```{r predict, warning=FALSE}
@@ -61,19 +84,19 @@ head(data,n = 6)
 I divide the day up into 10 minute chunks and the first goal is to reformat the data so that there is an easy way to view the number of calls received at the call center on each day for each time period.
 
 ```{r dataclean, warning=FALSE}
-data = filter(data, outcome=="AGENT")
-data = select(data,date,vru_entry)
+data = filter(data, outcome=="AGENT") ### keeping only agent outcome, rest are hangups or transforms(?!?)
+data = select(data,date,vru_entry) ### only interested in date and vru entry. disccarding all other columns
 data$timedate = paste(data$date,data$vru_entry)
-data$timedate = strptime(data$timedate,format='%y%m%d %H:%M:%S')
-tt = seq(from = ISOdate(1999,1,1,0,0,0,tz = "EST"), to = ISOdate(1999,12,31,0,0,0,tz = "EST"), by = "10 min")
-data$timeperiods = cut(data$timedate, breaks = tt)
+data$timedate = strptime(data$timedate,format='%y%m%d %H:%M:%S') ### converting to R date format
+tt = seq(from = ISOdate(1999,1,1,0,0,0,tz = "EST"), to = ISOdate(1999,12,31,0,0,0,tz = "EST"), by = "10 min") ### creating 10 minute chunks
+data$timeperiods = cut(data$timedate, breaks = tt) ### dividing up calls accoridn to 10 minute chunks
 
-data$periods <- sapply(strsplit(as.character(data$timeperiods) , " "), "[" , 2)
+data$periods <- sapply(strsplit(as.character(data$timeperiods) , " "), "[" , 2) ### keeping only the time period. date discarded
 
 data$timeperiods <- as.character(data$timeperiods)
-data$count <- as.numeric(ave(data$timeperiods, data$timeperiods, FUN = length))
+data$count <- as.numeric(ave(data$timeperiods, data$timeperiods, FUN = length)) ### creating a column with counts of how many calls were received in a certain time period
 
-data2 = select(data,date,periods,count)
+data2 = select(data,date,periods,count) ### keeping only relevant columns such as date, periods and counts.
 
 data_wide <- reshape(data2, 
   timevar = "periods",
@@ -82,6 +105,8 @@ data_wide <- reshape(data2,
 
 data_wide[is.na(data_wide)] = 0
 
+### reshaping long format to a wide format and setting all NA values to 0
+
 #### reordering column by time
 data_wide = data_wide[ , order(names(data_wide))]
 ```
@@ -89,15 +114,16 @@ After all the preprocessing the data in wide format look something like this:
 ```{r dataclean2, warning=FALSE}
 head(data_wide, n = 3)
 data_wide$date2 = strptime(data_wide$date,format='%y%m%d')
-data_wide$days = weekdays(data_wide$date2)
-data_wide$holidays = 1
+data_wide$days = weekdays(data_wide$date2) ### adding column for days of the week
+data_wide$holidays = 1 ### adding a holidays column. 1 means not a holiday. 2 means a holiday. mostly for data visualization
 for(i in 1:length(data_wide$date2)){
     for(count in 1:length(holidays)){
         if(sum(data_wide$date2[i]==holidays[count])>0){
             data_wide$holidays[i]=2}
     }
 }
-data_wide$Colour = ifelse(data_wide$days=="Friday",1,ifelse(data_wide$days=="Monday",2,ifelse(data_wide$days=="Saturday",3,ifelse(data_wide$days=="Sunday",4,ifelse(data_wide$days=="Thursday",5,ifelse(data_wide$days=="Tuesday",6,7))))))
+data_wide$Colour = ifelse(data_wide$days=="Friday",1,ifelse(data_wide$days=="Monday",2,ifelse(data_wide$days=="Saturday",3,ifelse(data_wide$days=="Sunday",4,ifelse(data_wide$days=="Thursday",5,ifelse(data_wide$days=="Tuesday",6,7)))))) ### adding a colour column based on day of week
+
 #### deleting all times before 7AM when the center opens and date column and convert data to matrix format
 X = as.matrix(data_wide[,-c(1:29,132:137)])
 Xsvd = svd(X)
@@ -284,5 +310,22 @@ pic<- ggplot(mergeddata, aes(x = Time, y=AE, group=Method, color=Method)) +
 print(pic)
 ```
 
-```{r sums, echo=FALSE}
+## Connections to graphical models
+
+FInally, here is a graph showing how the time periods are related.
+
+```{r graph, echo=FALSE, fig.width=8, fig.height=8}
+estadj = t(abs(out)>0.01)
+diag(estadj) = 0
+rownames(estadj) = unlist(str_split(toString(1:102),","))
+colnames(estadj) = unlist(str_split(toString(1:102),","))
+graphcscs = graph_from_adjacency_matrix(estadj)
+
+V(graphcscs)$color = rep("SkyBlue2",102)
+
+#elcscs = apply(get.edgelist(graphcscs), 1, paste, collapse="-")
+#E(graphcscs)$color <- ifelse(elcscs %in% eltrue, "Skyblue2", "red")
+#E(graphcscs)$lty <- ifelse(elcscs %in% eltrue, "1", "2")
+
+plot(graphcscs, layout = layout_nicely)
 ```
