@@ -1,4 +1,4 @@
-CSCS2 <- function(S, lambda, L, maxitr=100, tol=1e-4, warmstart=FALSE) {
+CSCS2 <- function( Y, lambda, L=NULL, maxitr=100, tol=1e-4, warmstart=FALSE) {
 
   #### inputs
   ## Y: n by p matrix of data
@@ -12,9 +12,15 @@ CSCS2 <- function(S, lambda, L, maxitr=100, tol=1e-4, warmstart=FALSE) {
   ## itr_log: (p-1)-vector of number of iterations 
   ## eps_log: (p-1)-vector of number maximum difference for considering convergence
   
-
+  
+  n = nrow(Y)
+  p = ncol(Y)
   
   if (length(lambda)==1) lambda = rep(lambda,p)
+
+  if (is.null(L)) L = diag(p)
+
+  S = (t(Y)%*%Y)/n
 
   itr_log = eps_log = NULL
 
