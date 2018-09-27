@@ -1,10 +1,10 @@
 ---
 title: "Call Center Data"
 author: "Syed Rahman"
-date: "2/6/2017"
+date: "9/27/2018"
 output:
-  html_document: default
   pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -22,8 +22,8 @@ library(reshape2)
 library(ggplot2)
 library(lassoshooting)
 library(caret)
-source('holidays.r')
-source('CSCS2.r')
+#source('holidays.r')
+#source('/Users/syedrahman/Documents/Fall2018/Rcode/CSCS/CSCS2.r')
 ```
 
 ## Call Center Data Analysis
@@ -114,8 +114,20 @@ After all the preprocessing the data in wide format look something like this:
 ```{r dataclean2, warning=FALSE}
 head(data_wide, n = 3)
 data_wide$date2 = strptime(data_wide$date,format='%y%m%d')
+head(data_wide, n = 3)
+```
+
+```{r dataclean3, warning=FALSE}
 data_wide$days = weekdays(data_wide$date2) ### adding column for days of the week
 data_wide$holidays = 1 ### adding a holidays column. 1 means not a holiday. 2 means a holiday. mostly for data visualization
+
+#downloading list of holidays for 1999 for Israel
+holidays = readLines('http://world.std.com/~reinhold/jewishholidays.txt')
+holidays = holidays[grepl('1999', holidays)]
+holidays = unlist(strsplit(holidays,'\t'))[seq(1, 28, 2)]
+holidays = strptime(holidays, "%a. %e %B %Y ")
+
+
 for(i in 1:length(data_wide$date2)){
     for(count in 1:length(holidays)){
         if(sum(data_wide$date2[i]==holidays[count])>0){
@@ -169,6 +181,72 @@ and $T$ is the size of the training dataset.
 
 ## Full dataset
 Initially we do the evaluations on the full dataset (including weekends). We estimate $\mu_2$ by using the sample mean and estimate $\Sigma$ using the sample covariance method and CSCS. For CSCS, we need to pick a penalty parameter, which we do using cross-validation of the likelihood. 
+
+```{r cscs, warning=FALSE}
+CSCS2 <- function( Y, lambda, L=NULL, maxitr=100, tol=1e-4, warmstart=FALSE) {
+
+  #### inputs
+  ## Y: n by p matrix of data
+  ## lambda: l1-penalty parameter
+  ## maxitr: maximum number of iterations allowed (diagonal/off-diagonal optimization)
+  ## tol: if maximum difference of iterates is less than tol, consider converged
+  ## warmstart: warmstarting actually made the runs slower (overhead may be too expensive)
+
+  #### outputs
+  ## L: lower triangular matrix of cholesky factor computed with CSCS algorithm
+  ## itr_log: (p-1)-vector of number of iterations 
+  ## eps_log: (p-1)-vector of number maximum difference for considering convergence
+  
+  
+  n = nrow(Y)
+  p = ncol(Y)
+
+  if (is.null(L)) L = diag(p)
+
+  S = (t(Y)%*%Y)/n
+
+  itr_log = eps_log = NULL
+
+  L[1, 1] = 1/sqrt(S[1,1])
+  for (k in 2:p){ ## Loop in Algorithm 2
+
+    ## nu_k vector (equation 2.5)
+    nuk_old = nuk_new = c(rep(0, k-1), 1) 
+    r = 0
+
+    repeat {      ## Loop in Algorithm 1
+
+      r = r + 1
+      
+      km1_ = 1:(k-1)    ## 1, ..., k-1 is off-diagonal elements indices
+
+      ## Update off-diagonal terms
+      hk = lassoshooting(XtX    =  S[km1_, km1_, drop=FALSE], 
+			 Xty    = -nuk_old[k] * S[km1_, k],
+			 lambda =  0.5*lambda)
+      nuk_new[km1_] = hk$coefficients
+
+      ## Update diagonal term
+      sumterm = sum(nuk_new[km1_] * S[k, km1_])
+      nuk_new[k] = (-sumterm + sqrt(sumterm^2 + 4*S[k, k]))/(2*S[k, k])
+
+      ## Check convergence
+      maxdiff = max(abs(nuk_new - nuk_old))
+      if (maxdiff < tol || r >= maxitr){
+	L[k, 1:k] = nuk_new
+	eps_log = c(eps_log, maxdiff)
+	itr_log = c(itr_log, r)
+	break
+      } else {
+	nuk_old = nuk_new
+      }
+    }
+  }
+
+  list(L=L, itr=itr_log, eps=eps_log)
+
+}
+```
 
 ```{r cv, warning=FALSE}
 cv = function(lambda,K,train){
